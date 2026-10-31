@@ -57,3 +57,14 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Test desktop, mobile, booking, messages and staff navigation
         run: python -m unittest discover -s tests -v
+
+  live-http:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify deployed demo services and fictional booking workflow
+        run: python -m unittest discover -s tests/live -v
