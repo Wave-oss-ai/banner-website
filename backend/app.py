@@ -22,9 +22,14 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=18000,
     MAX_CONTENT_LENGTH=8192,
 )
-PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH", "")
-if not PASSWORD_HASH:
-    raise RuntimeError("ADMIN_PASSWORD_HASH must be configured before starting the server")
+# Separate accounts for the shop owner and website developer. The old shared
+# password is never accepted when these are configured.
+USER_HASHES = {
+    "owner": os.environ.get("OWNER_PASSWORD_HASH", ""),
+    "developer": os.environ.get("DEVELOPER_PASSWORD_HASH", ""),
+}
+if not all(USER_HASHES.values()):
+    raise RuntimeError("OWNER_PASSWORD_HASH and DEVELOPER_PASSWORD_HASH must be configured")
 PUBLIC_ORIGIN = "https://pistons-auto-repair-demo.onrender.com"
 DATABASE_PATH = os.environ.get("DEMO_DB_PATH", "/tmp/pistons_owner_demo.sqlite3")
 TZ = ZoneInfo("America/Chicago")
@@ -38,6 +43,7 @@ def connect():
 
 def create_tables():
     with connect() as db:
+        db.execute("PRAGMA journal_mode=WAL")
         db.execute("""CREATE TABLE IF NOT EXISTS appointments (
             id TEXT PRIMARY KEY, name TEXT NOT NULL,
             vehicle TEXT NOT NULL, date TEXT NOT NULL, time TEXT NOT NULL,
@@ -72,6 +78,7 @@ def check_demo_text(text):
 def add_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
     response.headers["Cache-Control"] = "no-store"
@@ -119,8 +126,8 @@ def appointment_submission():
         requested = datetime.strptime(day + " " + clock, "%Y-%m-%d %H:%M")
     except ValueError:
         return jsonify(error="Invalid date or time."), 400
-    if requested.date() < datetime.now(TZ).date():
-        return jsonify(error="Choose a future date."), 400
+    if requested.replace(tzinfo=TZ) <= datetime.now(TZ):
+        return jsonify(error="Choose a future date and time."), 400
     if requested.weekday() >= 5 or requested.hour < 8 or requested.hour > 16 or requested.minute not in (0, 30) or (requested.hour == 16 and requested.minute > 30):
         return jsonify(error="Select a weekday from 8:00 AM through 4:30 PM."), 400
     reference = "DEMO-" + secrets.token_urlsafe(12)
@@ -165,6 +172,33 @@ def public_status(reference):
         return jsonify(error="Not found"), 404
     return jsonify(status=row["status"], demo=True)
 
+
+@app.get("/status/<reference>")
+def status_page(reference):
+    if not re.fullmatch(r"DEMO-[A-Za-z0-9_-]{12,30}", reference):
+        return "Sample request not found.", 404
+    with connect() as db:
+        row = db.execute("SELECT status FROM appointments WHERE id=?", (reference,)).fetchone()
+    if row is None:
+        return render_template_string("""<!doctype html><title>Sample request missing</title>
+        <body style="font-family:system-ui;background:#10151b;color:white;padding:40px">
+        <h1>Sample request not found</h1><p>The free demonstration server may have reset.</p>
+        <a style="color:#ff8d7d" href="https://pistons-auto-repair-demo.onrender.com">Back to demo website</a></body>"""), 404
+    return render_template_string("""<!doctype html><html lang="en"><head>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Appointment Status · Sample Only</title></head>
+    <body style="font-family:system-ui;background:#11161e;color:white;margin:0">
+    <main style="max-width:600px;margin:45px auto;padding:24px">
+    <p style="color:#f7b9a1;font-weight:700">UNOFFICIAL TEST ONLY</p>
+    <h1>Sample appointment status</h1>
+    <div style="background:#253041;padding:22px;border-radius:10px">
+    <p>Your sample request is currently:</p>
+    <h2 style="color:#c5ffd7">{{ status }}</h2></div>
+    <p>This is not an appointment with Pistons Auto Repair. Records may reset.</p>
+    <p><a style="color:#ff9384" href="/status/{{ reference }}">Refresh status</a> ·
+    <a style="color:#ff9384" href="https://pistons-auto-repair-demo.onrender.com">Return to website</a></p>
+    </main></body></html>""", status=row["status"], reference=reference)
+
 STYLE = """
 <style>
 *{box-sizing:border-box}body{margin:0;background:#11161e;color:#f3f6fa;font:15px/1.55 system-ui,-apple-system,sans-serif}
@@ -192,12 +226,13 @@ LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta
 <p class="muted">Use the private demo password to review sample appointment requests. This is not an official customer booking system.</p>
 <div class="panel"><form method="post" action="/owner/login">
 <input type="hidden" name="csrf" value="{{ csrf }}">
+<label for="username">Staff account</label><input id="username" name="username" autocomplete="username" required placeholder="owner or developer" maxlength="40">
 <label for="password">Staff demo password</label><input type="password" id="password" name="password" autocomplete="current-password" required>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 <button type="submit">SIGN IN SECURELY</button>
 </form></div>
 <p><a href="https://pistons-auto-repair-demo.onrender.com">← Back to public website</a></p>
-<p class="small muted">Sessions expire. Only people given the password can open the private dashboard. Demo records are temporary and can reset on free hosting.</p>
+<p class="small muted">Sessions expire. Each staff member has their own login. Demo records are temporary and can reset on free hosting.</p>
 </main><footer>Unofficial Pistons Auto Repair demonstration</footer></body></html>"""
 
 DASH_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -205,7 +240,7 @@ DASH_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta 
 <div class="top">PRIVATE STAFF PREVIEW · UNOFFICIAL DEMO ONLY · Temporary sample records</div>
 <main><div class="row"><div><p style="color:#ff8d7e;font-size:12px;font-weight:900;letter-spacing:2px">PISTONS AUTO REPAIR</p><h1>Owner & Staff Dashboard</h1></div>
 <form method="post" action="/owner/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary" type="submit">Log out</button></form></div>
-<p class="muted">Approve or decline sample appointments. The public demo does not collect real customer contact details or confirm genuine shop appointments.</p>
+<p class="muted">Signed in as <b>{{ username }}</b> ({{ role }}). Approve or decline fictional sample appointments only. This is not an official booking service.</p>
 <div class="grid"><div class="stat">Pending<strong>{{ counts['Pending'] }}</strong></div><div class="stat">Approved<strong>{{ counts['Approved'] }}</strong></div><div class="stat">Declined<strong>{{ counts['Declined'] }}</strong></div></div>
 {% if message %}<p class="panel" role="status">{{ message }}</p>{% endif %}
 <h2>Appointment requests</h2>
@@ -229,7 +264,9 @@ DASH_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta 
 def owner_only(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        if session.get("staff") is not True:
+        if (session.get("staff") is not True or
+            session.get("username") not in USER_HASHES or
+            session.get("role") not in ("owner", "developer")):
             return redirect(url_for("owner_login"))
         return fn(*args, **kwargs)
     return wrapper
@@ -252,15 +289,20 @@ def owner_login():
         if rate_limit("login", 7, 600):
             return "Too many attempts. Try again later.", 429
         password = request.form.get("password", "")
-        if len(password) > 256:
-            password = ""
-        if check_password_hash(PASSWORD_HASH, password):
+        username = request.form.get("username", "").strip().lower()
+        # Reject unknown accounts and avoid leaking which usernames are valid.
+        if len(password) > 256 or username not in USER_HASHES:
+            error = "Username or password not recognized."
+        elif check_password_hash(USER_HASHES[username], password):
             session.clear()
             session["staff"] = True
+            session["username"] = username
+            session["role"] = "owner" if username == "owner" else "developer"
             session["csrf"] = secrets.token_urlsafe(32)
             session.permanent = True
             return redirect(url_for("owner_dashboard"))
-        error = "Password not recognized."
+        else:
+            error = "Username or password not recognized."
     return render_template_string(LOGIN_HTML, csrf=session["csrf"], error=error)
 
 @app.get("/owner")
@@ -278,6 +320,7 @@ def owner_dashboard():
         "pending": "Sample appointment returned to Pending.", "conflict": "Time slot already approved for another sample request.",
         "missing": "Sample request no longer exists."}
     return render_template_string(DASH_HTML, appointments=appointments, messages=messages, counts=counts, csrf=session["csrf"],
+                                  username=session.get("username"), role=session.get("role"),
                                   message=messages_by_result.get(status, ""))
 
 @app.post("/owner/decision")

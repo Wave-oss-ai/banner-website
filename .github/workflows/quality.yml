@@ -1,0 +1,44 @@
+name: Pistons Demo Quality Checks
+on:
+  push:
+    branches: [main, pistons-quality-hardening]
+  pull_request:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install backend requirements
+        run: python -m pip install -r backend/requirements.txt
+      - name: Run backend integration tests
+        run: python -m unittest discover -s backend/tests -v
+      - name: Check frontend JavaScript syntax
+        run: |
+          python - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          class ScriptParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.inside=False
+                  self.script=[]
+              def handle_starttag(self,tag,attrs):
+                  if tag=="script":
+                      self.inside=True
+              def handle_data(self,data):
+                  if self.inside:
+                      self.script.append(data)
+              def handle_endtag(self,tag):
+                  if tag=="script":
+                      self.inside=False
+          p=ScriptParser()
+          p.feed(Path('index.html').read_text())
+          assert p.script, 'No inline JavaScript found'
+          Path('/tmp/pistons-script.js').write_text('\n'.join(p.script))
+          PY
+          node --check /tmp/pistons-script.js
