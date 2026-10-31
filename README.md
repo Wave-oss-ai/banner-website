@@ -23,13 +23,35 @@ Do not store staff passwords, secrets, or customer information in the public Git
 
 Because the demo server runs on Render's free tier, the first request may be slow while the instance wakes up. The temporary SQLite database can reset whenever the free instance restarts or redeploys, so don't depend on sample data still being present on Monday.
 
+## October 31 quality verification
+
+All three automated suites passed on the final review branch:
+
+- **28 backend integration tests:** sample requests, approved/declined/pending flow, cross-browser status, double-booking prevention, owner/developer login, logout, CSRF checks, anonymous access denial, validation, rate limiting, message handling, security headers.
+- **6 headless Chromium UI tests:** booking and message forms, mobile layout, staff navigation, status link rendering, error handling.
+- **7 live HTTP tests:** actual public demo and staff-server responses, protected login gate, browser preflight CORS, fictional booking request and status page, fictional message, blocked unapproved origin.
+- Both existing Render services reported a successful **live** deploy of the hardened application. Tests did not use real customer information.
+
+### Staff demo accounts
+
+There are now two separate username/password accounts, `owner` and `developer`. Temporary demo password hashes are stored in Render environment variables, **not in GitHub**. The developer can show the dashboard to the owner without sharing an admin password. The old single shared password has been replaced.
+
+After owner acceptance, change the temporary demo passwords, provision individual production accounts, and do not reuse any demo credential on the real business website.
+
+### Approval demonstration
+
+1. Open the public website, submit a fictional appointment with a weekday/time in the future.
+2. Open the private staff website and sign in as `developer` or `owner`.
+3. Click **Approve** or **Decline** on the request.
+4. Use the **Check sample approval status** link from the original customer page to see the readable updated status.
+
 ## Verified during October 31, 2026 preparation
 
 - Both Render services reported **live** after deployment.
 - Render logged a sample message POST to `/api/messages` with HTTP **201 Created**, confirming it was accepted.
 - Render logged a successful staff login and access to `/owner` with HTTP **200**.
-- Code for appointment approval, decline, conflict handling and status-check links is present, but a real cross-device approval end-to-end test has **not** yet been independently observed.
-- Password-protected staff access is active, but it's **one shared demo password**; it's not yet separate staff accounts.
+- Cross-client end-to-end flows passed in integration tests; full browser and live server smoke tests passed. A real two-person hands-on owner walkthrough is still useful before Monday.
+- Password-protected staff access uses separate owner and developer demo accounts; true production account lifecycle, MFA and recovery still require setup.
 - No paid hosting or databases have been activated for this project.
 
 ## Questions to confirm with owner
